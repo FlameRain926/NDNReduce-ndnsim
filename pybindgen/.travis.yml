@@ -1,0 +1,20 @@
+language: python
+arch:
+  - ppc64le
+  - amd64
+
+python:
+  - 2.7
+  - 3.6
+  - 3.7
+  - 3.8
+
+
+sudo: false
+
+install:
+  - travis_retry pip install tox
+
+script:
+  - python setup.py -V && ./waf configure && ./waf check
+
