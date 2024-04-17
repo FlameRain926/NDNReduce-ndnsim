@@ -107,7 +107,7 @@ public:
 public:
   typedef void (*LastRetransmittedInterestDataDelayCallback)(Ptr<App> app, uint32_t seqno, Time delay, int32_t hopCount);
   typedef void (*FirstInterestDataDelayCallback)(Ptr<App> app, uint32_t seqno, Time delay, uint32_t retxCount, int32_t hopCount);
-
+  static u_int16_t all_scatter_fin;
 protected:
   // from App
   virtual void
@@ -137,13 +137,16 @@ protected:
   WindowIncrease();
 
   void
-  WindowDecrease();
+  WindowDecrease(bool loss);
 
   void
   CubicIncrease();
 
   void
   CubicDecrease();
+
+  void
+  WindowReset();
 
   /**
    * \brief Checks if the packet need to be retransmitted becuase of retransmission timer expiration
@@ -207,7 +210,11 @@ protected:
   int round;//training round
   std::vector<int> data_count;//received data count per round
   std::vector<int> all_data_count;//received data count per round
+  std::vector<int> data_timeout_count;//timeouted data count per round
   EventId event_id;
+  bool enter_allgather = false;
+  u_int16_t scatfin_machine = 0;
+  // static u_int16_t all_scatter_fin;
 
   std::list<int> sequence_to_send;//a list to maintain the pending sequence number
 
@@ -226,8 +233,8 @@ protected:
   TracedValue<uint32_t> m_inFlight;
 
   //ndn-consumer-pcon
-  double m_addRttSuppress;
   bool m_reactToCongestionMarks;
+  double m_addRttSuppress;
   bool m_useCwa;
 
   double m_ssthresh;
@@ -243,6 +250,7 @@ protected:
   double m_cubicWmax;
   double m_cubicLastWmax;
   time::steady_clock::TimePoint m_cubicLastDecrease;
+  Time m_cubicLastdec;
 
   //lxd producer
   Name m_prefix;
@@ -319,7 +327,14 @@ protected:
                  uint32_t /*retx count*/, int32_t /*hop count*/> m_firstInterestDataDelay;
 
   TracedCallback<uint32_t, uint32_t> m_allgathersize;
-
+  TracedCallback<uint32_t> m_scatterfinsign;
+  TracedCallback<uint32_t> m_allgatherfinsign;
+  TracedCallback<uint32_t, uint32_t,double,double,Time> m_timeout;
+  TracedCallback<uint32_t, uint32_t,double,double,uint32_t> m_retrans;
+  TracedCallback<bool, uint32_t,double,double,uint32_t> m_sendsign;
+  TracedCallback<uint32_t,uint32_t,double,double,uint64_t,Time> m_hop;
+  TracedCallback<double,double> m_increase;
+  TracedCallback<double,double,double,double> m_decrease;
   /// @endcond
 };
 

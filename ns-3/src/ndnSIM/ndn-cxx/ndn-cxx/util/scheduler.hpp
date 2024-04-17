@@ -25,6 +25,7 @@
 #include "ndn-cxx/detail/asio-fwd.hpp"
 #include "ndn-cxx/detail/cancel-handle.hpp"
 #include "ndn-cxx/util/time.hpp"
+#include<optional>//lxd
 
 #include "ns3/simulator.h"
 

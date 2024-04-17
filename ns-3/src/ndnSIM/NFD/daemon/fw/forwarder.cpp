@@ -38,6 +38,7 @@
 
 #include "face/null-face.hpp"
 
+
 namespace nfd {
 
 NFD_LOG_INIT(Forwarder);
@@ -330,9 +331,12 @@ Forwarder::onIncomingData(const Data& data, const FaceEndpoint& ingress)
     this->onDataUnsolicited(data, ingress);
     return;
   }
+  //fix hopcout bug by lxd
+  shared_ptr<const Data> tmp_data = make_shared<Data>(data);
+  tmp_data->setTag<lp::HopCountTag>(0);
 
   // CS insert
-  m_cs.insert(data);
+  m_cs.insert(*tmp_data);
 
   std::set<std::pair<Face*, EndpointId>> satisfiedDownstreams;
   std::multimap<std::pair<Face*, EndpointId>, std::shared_ptr<pit::Entry>> unsatisfiedPitEntries;

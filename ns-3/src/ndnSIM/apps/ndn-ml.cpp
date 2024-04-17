@@ -70,7 +70,7 @@ ndnml::GetTypeId(void)
 
       .AddAttribute("RetxTimer",
                     "Timeout defining how frequent retransmission timeouts should be checked",
-                    StringValue("50ms"),
+                    StringValue("0.1ms"),
                     MakeTimeAccessor(&ndnml::GetRetxTimer, &ndnml::SetRetxTimer),
                     MakeTimeChecker())
 
@@ -87,6 +87,40 @@ ndnml::GetTypeId(void)
                       "Trace the size of allgather data a machine send in total",
                       MakeTraceSourceAccessor(&ndnml::m_allgathersize),
                       "ns3::ndn::Consumer::FirstInterestDataDelayCallback")
+      .AddTraceSource("Scatterfinishsign",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_scatterfinsign),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")
+      .AddTraceSource("Allgatherfinishsign",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_allgatherfinsign),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")                
+
+      .AddTraceSource("TraceTimeout",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_timeout),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")                
+      .AddTraceSource("TraceRetrans",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_retrans),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")  
+
+      .AddTraceSource("TraceSend",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_sendsign),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")  
+      .AddTraceSource("TraceHop",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_hop),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")  
+      .AddTraceSource("TraceCubicIncrease",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_increase),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")  
+      .AddTraceSource("TraceCubicDecrease",
+                      "Trace the size of allgather data a machine send in total",
+                      MakeTraceSourceAccessor(&ndnml::m_decrease),
+                      "ns3::ndn::Consumer::FirstInterestDataDelayCallback")  
 
       .AddAttribute("MachineRank", "Machine Rank", StringValue("0"),
                     MakeIntegerAccessor(&ndnml::m_rank), MakeIntegerChecker<int>())
@@ -97,7 +131,7 @@ ndnml::GetTypeId(void)
 
       .AddAttribute("Prefix", "Prefix, for which producer has the data", StringValue("/"),
                     MakeNameAccessor(&ndnml::m_prefix), MakeNameChecker())
-      .AddAttribute("PayloadSize", "Virtual payload size for Content packets", UintegerValue(1020),
+      .AddAttribute("PayloadSize", "Virtual payload size for Content packets", UintegerValue(996),
                     MakeUintegerAccessor(&ndnml::m_virtualPayloadSize),
                     MakeUintegerChecker<uint32_t>())
       .AddAttribute("KeyLocator",
@@ -117,21 +151,22 @@ ndnml::ndnml()
     m_firstTime(true)
     //ndn-consumer-window
     , m_initialWindow(1)
-    , m_setInitialWindowOnTimeout(true)
+    , m_setInitialWindowOnTimeout(false)
     , m_window(1)
     , m_inFlight(0)
     //ndn-consumer-pcon
     , m_reactToCongestionMarks(true)
     , m_addRttSuppress(0.5)
     , m_useCwa(true)
-    , m_useCubicFastConv(true)
-    , m_cubicBeta(0.8)
     , m_ssthresh(std::numeric_limits<double>::max())
     , m_highData(0)
     , m_recPoint(0.0)
+    , m_useCubicFastConv(true)
+    , m_cubicBeta(0.8)
     , m_cubicWmax(0)
     , m_cubicLastWmax(0)
     , m_cubicLastDecrease(time::steady_clock::now())
+    , m_cubicLastdec(Simulator::Now())
 {
   NS_LOG_FUNCTION_NOARGS();
   m_seqMax = std::numeric_limits<uint32_t>::max();
@@ -416,12 +451,15 @@ ndnml::SendPacket2()
 
   NS_LOG_FUNCTION_NOARGS();
 
+  // std::cout << m_sendEvent.IsRunning() << std::endl;
   bool retx_flag = false;
   uint32_t seq = std::numeric_limits<uint32_t>::max(); // invalid
   //std::cout<<"retrans size: "<<m_retxSeqs.size()<<std::endl;
   while (m_retxSeqs.size()) {
     seq = *m_retxSeqs.begin();
-    std::cout<<"enter retrans"<<seq<<std::endl;
+    //std::cout<<"enter retrans sendpacket2 for "<<seq<<std::endl;
+    if(this->GetNode()->GetId() == 0)
+      m_retrans(this->GetNode()->GetId(),seq,m_window,m_inFlight,m_seq);
     m_retxSeqs.erase(m_retxSeqs.begin());
     retx_flag = true;
     break;
@@ -435,11 +473,11 @@ ndnml::SendPacket2()
         return; // we are totally done
       }
     }
-
+    //m_seq储存已经发出去的包的数量
     seq = m_seq++;
   }
   //maintain the sequence number list
-  if(sequence_to_send.empty()&&!retx_flag)
+  if(sequence_to_send.empty() && !retx_flag)
     return;
 
   if(!retx_flag){
@@ -458,6 +496,8 @@ ndnml::SendPacket2()
   //
 
   u_int32_t retx_machine;
+
+  bool flag_send_or_not = true;
   if(seq >= 0 && seq <  uint32_t((total_machine-1)*model_size)){
     retx_machine = (seq%(total_machine-1)+m_rank+1)%total_machine;
 
@@ -470,6 +510,8 @@ ndnml::SendPacket2()
     nameWithSequence->appendNumber(m_rank);
 
     nameWithSequence->appendNumber(seq%(total_machine-1));
+    if(data_count[retx_machine] == model_size)
+      flag_send_or_not = false;
     
   }
   else if(seq >= uint32_t((total_machine-1)*model_size) && seq <  uint32_t((total_machine-1)*(model_size+1))){
@@ -528,6 +570,11 @@ ndnml::SendPacket2()
   // nameWithSequence->appendNumber(data_sequence);
   
   // shared_ptr<Interest> interest = make_shared<Interest> ();
+  if(!flag_send_or_not){
+    SchedulePacketWithWindow();
+    return;
+  }
+      
   shared_ptr<Interest> interest = make_shared<Interest>();
   interest->setNonce(m_rand->GetValue(0, std::numeric_limits<uint32_t>::max()));
   interest->setName(*nameWithSequence);
@@ -539,13 +586,19 @@ ndnml::SendPacket2()
   interest->setInterestLifetime(interestLifeTime);
   interest->setRank(m_rank);
   // NS_LOG_INFO ("Requesting Interest: \n" << *interest);
+
+  
+
   NS_LOG_INFO("> Interest for " << seq);
+  if(this->GetNode()->GetId() == 0)
+    m_sendsign(retx_flag,seq,m_window,m_inFlight,m_seq);
 
   WillSendOutInterest(seq);
 
   m_transmittedInterests(interest, this, m_face);
   //std::cout<<"enter send "<<GetNode()->GetId()<<std::endl;
   m_appLink->onReceiveInterest(*interest);
+  
   //m_allgathersize(this->GetNode()->GetId(),interest->Gets);
   SchedulePacketWithWindow();
   //ScheduleNextPacket();
@@ -560,7 +613,7 @@ ndnml::SchedulePacket2(){
 
 void
 ndnml::SchedulePacketWithWindow(){
-    if (m_window == static_cast<uint32_t>(0)) {
+  if (m_window == static_cast<uint32_t>(0)) {
     Simulator::Remove(m_sendEvent);
 
     NS_LOG_DEBUG(
@@ -572,14 +625,17 @@ ndnml::SchedulePacketWithWindow(){
                           &ndnml::SendPacket2, this);
   }
   else if (m_inFlight >= m_window) {
+    return;
     // simply do nothing
   }
   else {
     if (m_sendEvent.IsRunning()) {
-      Simulator::Remove(m_sendEvent);
+      Time nextTime(Seconds(1072*8 / static_cast<double>(10000000000)));
+      Simulator::Schedule(nextTime,&ndnml::SchedulePacketWithWindow,this);
+      // Simulator::Remove(m_sendEvent);
     }
-
-    m_sendEvent = Simulator::ScheduleNow(&ndnml::SendPacket2,this);
+    else if(!sequence_to_send.empty() || !m_retxSeqs.empty())
+      m_sendEvent = Simulator::ScheduleNow(&ndnml::SendPacket2,this);
   }
 }
 
@@ -608,6 +664,7 @@ ndnml::OnData(shared_ptr<const Data> data)
   uint64_t machine = std::stoi(data->getName().at(0).toUri());
   //std::cout<< machine<<std::endl;
   std::string phase = data->getName().at(2).toUri();
+
   //std::cout<< test1<<std::endl;
   //uint32_t test = data->getName().at(3).toNumber();
   //std::cout<< test<<std::endl;
@@ -617,8 +674,6 @@ ndnml::OnData(shared_ptr<const Data> data)
     hopCount = *hopCountTag;
   }
   NS_LOG_DEBUG("Hop count: " << hopCount);
-  //std::cout<<"hop count: "<<hopCount<<std::endl;
-
   
   if(phase == "ScatterReduce"){
     int flag1 = 0;
@@ -630,8 +685,16 @@ ndnml::OnData(shared_ptr<const Data> data)
         break;
       }
     }
-    if(flag1 == 0)
-      Simulator::ScheduleNow(&ndnml::Allgather_Send,this);
+    if(flag1 == 0){
+      // std::cout<<"machine "<<m_rank<<"count:  "<<std::endl;
+      // for(int i = 0;i<total_machine;i++)
+      //   std::cout<<data_count[i]<<'\t'<<std::endl;
+      scatfin_machine++;
+      //all_scatter_fin++;
+      if(scatfin_machine == total_machine)
+        enter_allgather = true;
+      WindowReset();
+      Simulator::ScheduleNow(&ndnml::Allgather_Send,this);}
   }
   else if(phase == "AllGatherPull"){
     int flag2 = 0;
@@ -646,6 +709,7 @@ ndnml::OnData(shared_ptr<const Data> data)
     if(flag2 == 0){
       Time now = Simulator::Now();
       std::cout<<"counts down "<<GetNode()->GetId()<<"communication time :"<<now - start_time<<std::endl;
+      m_allgatherfinsign(this->GetNode()->GetId());
       }
   }
   
@@ -667,9 +731,9 @@ ndnml::OnData(shared_ptr<const Data> data)
   m_seqTimeouts.erase(seq);
   m_retxSeqs.erase(seq);
 
-  m_rtt->AckSeq(SequenceNumber32(seq));
+  Time RTT = m_rtt->AckSeq(SequenceNumber32(seq));
 
-  //ndn-consumer-pcon's OnData
+  //ndn-consumer-pcon's OnData lxd
   if(m_highData < seq){
     if(seq < m_seqgapbase)
       m_highData = seq;
@@ -681,14 +745,22 @@ ndnml::OnData(shared_ptr<const Data> data)
     if (m_reactToCongestionMarks) {
       NS_LOG_DEBUG("Received congestion mark: " << data->getCongestionMark());
       //std::cout << "congestion mark triggered: " << data->getCongestionMark()<<"machine : "<<this->GetNode()->GetId()<<std::endl;
-      WindowDecrease();
+      WindowDecrease(0);
     }
     else {
       NS_LOG_DEBUG("Ignored received congestion mark: " << data->getCongestionMark());
     }
   }
   else {
-    WindowIncrease();
+    if(RTT < Seconds(0.01)){
+      if(m_window < 100.0 && !enter_allgather)
+        WindowIncrease();
+      else if(m_window<1000.0 && enter_allgather)
+        WindowIncrease();
+    }
+     
+    else if(m_cubicLastdec + Seconds(0.01) < Simulator::Now())
+        WindowDecrease(0);
   }
 
   if (m_inFlight > static_cast<uint32_t>(0)) {
@@ -696,12 +768,16 @@ ndnml::OnData(shared_ptr<const Data> data)
   }
 
   NS_LOG_DEBUG("Window: " << m_window << ", InFlight: " << m_inFlight);
+  if(m_rank == 0)
+    m_hop(seq,hopCount,m_window,m_inFlight,data->getCongestionMark(),RTT);
 
   SchedulePacketWithWindow();
 }
 
 void
-ndnml::WindowDecrease(){
+ndnml::WindowDecrease(bool loss){
+  if(m_window <= 6000 && loss == 0)
+    return;
   if (!m_useCwa || m_highData > m_recPoint) {
     const double diff = m_seq - m_highData;
     BOOST_ASSERT(diff > 0);
@@ -758,8 +834,11 @@ ndnml::CubicIncrease()
     if (cubic_increment < 0) {
       cubic_increment = 0.0;
     }
-    m_window += cubic_increment / m_window;
+    double temp = cubic_increment / m_window;
+    m_window += std::max(temp, 1.0);
   }
+  if(m_rank == 0)
+    m_increase(m_window,m_ssthresh);
 }
 
 void
@@ -787,11 +866,28 @@ ndnml::CubicDecrease()
 
   m_ssthresh = m_window * m_cubicBeta;
   m_ssthresh = std::max<double>(m_ssthresh, m_initialWindow);
+  // m_ssthresh = std::max<double>(m_ssthresh, 500.0);
   m_window = m_ssthresh;
 
   m_cubicLastDecrease = time::steady_clock::now();
+  m_cubicLastdec = Simulator::Now();
+  if(m_rank == 0)
+    m_decrease(m_window,m_ssthresh,m_cubicWmax,m_cubicLastWmax);
 }
 
+
+void
+ndnml::WindowReset(){
+  if(m_inFlight > 0)
+    return;
+  m_window = m_initialWindow;//1
+  m_ssthresh = std::numeric_limits<double>::max();
+  m_cubicWmax = 0;
+  m_cubicLastWmax = 0;
+  m_cubicLastDecrease = time::steady_clock::now();
+  m_cubicLastdec = Simulator::Now();
+
+}
 
 void
 ndnml::OnNack(shared_ptr<const lp::Nack> nack)
@@ -806,15 +902,20 @@ ndnml::OnNack(shared_ptr<const lp::Nack> nack)
 void
 ndnml::OnTimeout(uint32_t sequenceNumber)
 { //ndn-consumer-window
+
+  
+    Time rto = m_rtt->RetransmitTimeout();
+    m_timeout(this->GetNode()->GetId(),sequenceNumber,m_window,m_inFlight,rto);
+    
+
   NS_LOG_FUNCTION(sequenceNumber);
-   WindowDecrease();
+   WindowDecrease(1);
 
   if (m_inFlight > static_cast<uint32_t>(0)) {
     m_inFlight--;
   }
 
   NS_LOG_DEBUG("Window: " << m_window << ", InFlight: " << m_inFlight);
-
   // std::cout << Simulator::Now () << ", TO: " << sequenceNumber << ", current RTO: " <<
   // m_rtt->RetransmitTimeout ().ToDouble (Time::S) << "s\n";
 
@@ -822,9 +923,14 @@ ndnml::OnTimeout(uint32_t sequenceNumber)
   m_rtt->SentSeq(SequenceNumber32(sequenceNumber),
                  1); // make sure to disable RTT calculation for this sample
   m_retxSeqs.insert(sequenceNumber);
-  std::cout<<Simulator::Now()<<std::endl;
-  std::cout<<"enter time out"<<GetNode()->GetId()<<"for "<<sequenceNumber<<std::endl;
-  // if(sequenceNumber<(total_machine-1)*model_size)
+  
+  if(sequenceNumber<(total_machine-1)*model_size){
+    data_timeout_count[(sequenceNumber%(total_machine-1)+m_rank+1)%total_machine]++;
+    if(data_timeout_count[(sequenceNumber%(total_machine-1)+m_rank+1)%total_machine] >= 3)
+      //认为该节点down了，不再向其pull数据
+      data_count[(sequenceNumber%(total_machine-1)+m_rank+1)%total_machine] = model_size;
+  }
+
   //   ScheduleNextPacket(m_rank+(sequenceNumber%(total_machine-1)));
   // else
   //   ScheduleNextPacket(sequenceNumber-(total_machine-1)*model_size);
@@ -866,7 +972,10 @@ void
 ndnml::Allgather_Send(){
     //std::cout<<"enter allgather_send for "<<GetNode()->GetId()<<std::endl;
         // for(int i = 1;i<total_machine;i++){
-            SchedulePacket(1,(m_rank+1)%total_machine,1-1);
+    /*to reinitialize the cubic window*/
+
+        SchedulePacket(1,(m_rank+1)%total_machine,1-1);
+        m_scatterfinsign(this->GetNode()->GetId());
   // }
 }
 void
@@ -874,6 +983,7 @@ ndnml::Allgather_Pull(uint32_t machine){
     //std::cout<<"enter allgather_pull in machine "<<GetNode()->GetId()<<"for machine "<<machine<<std::endl;
     // for(int j = 0;j<model_size;j++){
             SchedulePacket(2,machine,1);
+            //enter_allgather = true;
     // }
 }
 
@@ -922,6 +1032,7 @@ ndnml::SchedulePacket(const uint32_t flag,const uint32_t machinenumber,const uin
             //last_send_time += 1.0 / m_frequency;
         }
     }
+    start_time = Simulator::Now();
     SchedulePacketWithWindow();
     // if (m_firstTime) {
     //   m_sendEvent = Simulator::Schedule(Seconds(0.0), &ndnml::SendPacket1, this, flag, machinenumber, sequenceNumber);
@@ -1005,6 +1116,8 @@ ndnml::ScatterReduce(uint32_t iii){
     data_count.assign(total_machine,0);
     all_data_count.clear();
     all_data_count.assign(total_machine,0);
+    data_timeout_count.clear();
+    data_timeout_count.assign(total_machine,0);
     //std::cout<<"enter reduce"<<GetNode()->GetId()<<std::endl;
     // for(int j = 0;j<model_size;j++){
     //     for(int i = 1;i<total_machine;i++){
@@ -1018,7 +1131,7 @@ ndnml::ScatterReduce(uint32_t iii){
 void
 ndnml::train(){
     std::cout<<"enter train"<<GetNode()->GetId()<<std::endl;
-    start_time = Simulator::Now();
+    //start_time = Simulator::Now();
     //event_id = Simulator::Schedule(Seconds(1.0), &ndnml::ScatterReduce,this, 1);
     ScatterReduce(1);
 }
@@ -1062,11 +1175,24 @@ ndnml::OnInterest(shared_ptr<const Interest> interest)
   }
 
   data->setSignatureInfo(signatureInfo);
+  
 
   ::ndn::EncodingEstimator estimator;
   ::ndn::EncodingBuffer encoder(estimator.appendVarNumber(m_signature), 0);
   encoder.appendVarNumber(m_signature);
   data->setSignatureValue(encoder.getBuffer());
+
+  if(phaze == "ScatterReduce" || phaze =="AllGatherSignal"){
+    lp::CachePolicy cachePolicy;
+    cachePolicy.setPolicy(lp::CachePolicyType::NO_CACHE);
+    data->setTag(make_shared<lp::CachePolicyTag>(cachePolicy));
+  }
+
+  // else if(phaze == "AllGatherPull"){
+  //   lp::CachePolicy cachePolicy;
+  //   cachePolicy.setPolicy(lp::CachePolicyType::NO_CACHE);
+  //   data->setTag(make_shared<lp::CachePolicyTag>(cachePolicy));
+  // }
 
   NS_LOG_INFO("node(" << GetNode()->GetId() << ") responding with Data: " << data->getName());
 
@@ -1080,6 +1206,10 @@ ndnml::OnInterest(shared_ptr<const Interest> interest)
      //std::cout<<"rank "<<interest->getApplicationParameters().get(0).data();
   }
   if(phaze =="AllGatherSignal"){
+    scatfin_machine++;
+    //all_scatter_fin++;
+    if(scatfin_machine == total_machine)
+        enter_allgather = true;
     Allgather_Pull(machine);
   }
 }

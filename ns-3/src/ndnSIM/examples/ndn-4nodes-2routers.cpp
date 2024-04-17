@@ -71,6 +71,7 @@ uint64_t PhyTxDropBytes[7] = {0};
 uint64_t PhyTxDropprev[7] = {0};
 uint64_t PhyRxDroprxBytes[7] = {0};
 uint64_t PhyRxDroprxprev[7] = {0};
+int32_t debug_trace = 0;
 
 
 // static void
@@ -90,6 +91,12 @@ uint64_t PhyRxDroprxprev[7] = {0};
 //    	prev_send = itr->second.txBytes;
 //    	Simulator::Schedule (Seconds (1), &TraceThroughput, monitor);
 // }
+static void
+Tracedebug (){
+  Time now = Simulator::Now();
+  std::cout<<"time: "<<now<<std::endl;
+}
+
 
 static void
 TraceThroughput_send ()
@@ -365,7 +372,7 @@ main(int argc, char* argv[])
   Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::PointToPointNetDevice/PhyRxDropDetail",
                                 MakeCallback(&TracePhyRxDrop));                                                             
                                                              
-  
+  Simulator::Schedule (Seconds (1), &TraceThroughput_send);
   Simulator::Stop(Seconds(15.0));    //一定要加这句话，否则会出现仿真不会停止的情况
   Simulator::Run ();
   Simulator::Destroy();
